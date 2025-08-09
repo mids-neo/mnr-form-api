@@ -1,0 +1,108 @@
+{
+    "Height": {
+        "feet": null,
+        "inches": null
+    },
+    "Weight_lbs": null,
+    "Blood_Pressure": {
+        "systolic": null,
+        "diastolic": null
+    },
+    "Pregnant": {
+        "No": false,
+        "Yes": false,
+        "Weeks": null,
+        "Physician": null
+    },
+    "Date": null,
+    "Signature": null,
+    "Primary_Care_Physician": null,
+    "Physician_Phone": null,
+    "Employer": null,
+    "Job_Description": null,
+    "Under_Physician_Care": {
+        "No": false,
+        "Yes": false,
+        "Conditions": null
+    },
+    "Current_Health_Problems": null,
+    "When_Began": null,
+    "How_Happened": null,
+    "Treatment_Received": {
+        "Surgery": false,
+        "Medications": false,
+        "Physical_Therapy": false,
+        "Chiropractic": false,
+        "Massage": false,
+        "Injections": false,
+        "Other": null
+    },
+    "Symptoms_Past_Week_Percentage": {
+        "0-10%": false,
+        "11-20%": false,
+        "21-30%": false,
+        "31-40%": false,
+        "41-50%": false,
+        "51-60%": false,
+        "61-70%": false,
+        "71-80%": false,
+        "81-90%": false,
+        "91-100%": false
+    },
+    "Pain_Level": {
+        "Average_Past_Week": null,
+        "Worst_Past_Week": null,
+        "Current": null
+    },
+    "Daily_Activity_Interference": null,
+    "New_Complaints": {
+        "No": false,
+        "Yes": false,
+        "Explain": null
+    },
+    "Re_Injuries": {
+        "No": false,
+        "Yes": false,
+        "Explain": null
+    },
+    "Helpful_Treatments": {
+        "Acupuncture": false,
+        "Chinese_Herbs": false,
+        "Massage_Therapy": false,
+        "Nutritional_Supplements": false,
+        "Prescription_Medications": false,
+        "Physical_Therapy": false,
+        "Rehab_Home_Care": false,
+        "Spinal_Adjustment_Manipulation": false,
+        "Other": null
+    },
+    "Activities_Monitored": [],
+    "Pain_Medication": null,
+    "Health_History": null,
+    "Pain_Quality": {
+        "Sharp": false,
+        "Throbbing": false,
+        "Ache": false,
+        "Burning": false,
+        "Numb": false,
+        "Tingling": false
+    },
+    "Progress_Since_Acupuncture": {
+        "Excellent": false,
+        "Good": false,
+        "Fair": false,
+        "Poor": false,
+        "Worse": false
+    },
+    "Relief_Duration": {
+        "Hours": false,
+        "Hours_Number": null,
+        "Days": false,
+        "Days_Number": null
+    },
+    "Upcoming_Treatment_Course": {
+        "1_per_week": false,
+        "2_per_week": false,
+        "Out_of_Town_Dates": null
+    }
+}
