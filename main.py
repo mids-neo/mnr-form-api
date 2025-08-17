@@ -16,6 +16,7 @@ import shutil
 import logging
 import asyncio
 import urllib.parse
+from datetime import datetime
 from pathlib import Path
 
 # Import progress tracking
@@ -737,6 +738,65 @@ async def get_processor_stats():
                 "legacy_available": LEGACY_AVAILABLE
             }
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/update-pdf")
+async def update_pdf_with_corrections(
+    corrected_data: dict,
+    output_format: str = Query("mnr", description="Output format: 'mnr' or 'ash'"),
+    enhanced: bool = Query(True, description="Use enhanced PDF filler")
+):
+    """Update and regenerate PDF with user corrections"""
+    try:
+        logger.info(f"🔄 Regenerating PDF with user corrections: format={output_format}, enhanced={enhanced}")
+        
+        if not PIPELINE_AVAILABLE:
+            raise HTTPException(status_code=503, detail="Pipeline not available")
+        
+        # Import pipeline components
+        from pipeline.mnr_pdf_filler import fill_mnr_pdf
+        from pipeline.ash_pdf_filler import fill_ash_pdf
+        
+        # Use the corrected data directly - no JSON processing pipeline
+        # The corrected_data should be the updated original extracted data structure
+        
+        # Generate new PDF with corrected data
+        output_filename = f"corrected_{os.urandom(4).hex()}_{output_format}_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        output_path = OUTPUT_DIR / output_filename
+        
+        if output_format == "mnr":
+            # Use MNR PDF filler with original data structure
+            template_path = TEMPLATE_DIR / "mnr_form.pdf"
+            result = fill_mnr_pdf(
+                data=corrected_data,
+                template_path=str(template_path),
+                output_path=str(output_path)
+            )
+        else:
+            # Use ASH PDF filler with original data structure
+            template_path = TEMPLATE_DIR / "ash_medical_form.pdf"
+            result = fill_ash_pdf(
+                data=corrected_data,
+                template_path=str(template_path),
+                output_path=str(output_path)
+            )
+        
+        if result.success:
+            logger.info(f"✅ PDF regenerated successfully: {output_filename}")
+            return {
+                "success": True,
+                "message": f"PDF updated successfully with corrections",
+                "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}",
+                "fields_filled": result.fields_filled,
+                "output_format": output_format,
+                "enhanced_filling": enhanced,
+                "corrected_data": corrected_data
+            }
+        else:
+            raise HTTPException(status_code=500, detail=f"PDF generation failed: {result.error}")
+            
+    except Exception as e:
+        logger.error(f"❌ PDF update failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/cleanup")
