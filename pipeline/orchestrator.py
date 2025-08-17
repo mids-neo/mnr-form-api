@@ -242,7 +242,7 @@ class MedicalFormPipeline:
             if self.config.output_format.lower() == "ash":
                 template_path = self._find_template("ash_medical_form.pdf")
             else:
-                template_path = self._find_template("Patience MNR Form.pdf")
+                template_path = self._find_template("mnr_form.pdf")
         
         if not template_path or not os.path.exists(template_path):
             raise FileNotFoundError(f"Template not found for {self.config.output_format} format")

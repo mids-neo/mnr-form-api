@@ -305,7 +305,7 @@ async def generate_filled_pdf(
             output_filename = f"ash_filled_{os.urandom(4).hex()}.pdf"
         else:
             # Default to MNR template
-            template_path = TEMPLATE_DIR / "Patience MNR Form.pdf"
+            template_path = TEMPLATE_DIR / "mnr_form.pdf"
             output_filename = f"mnr_filled_{os.urandom(4).hex()}.pdf"
         
         if not template_path.exists():
@@ -455,7 +455,7 @@ async def process_complete_pipeline(
                 template_path = TEMPLATE_DIR / "ash_medical_form.pdf"
                 output_filename = f"ash_complete_{os.urandom(4).hex()}.pdf"
             else:
-                template_path = TEMPLATE_DIR / "Patience MNR Form.pdf"
+                template_path = TEMPLATE_DIR / "mnr_form.pdf"
                 output_filename = f"mnr_complete_{os.urandom(4).hex()}.pdf"
             
             output_path = OUTPUT_DIR / output_filename
