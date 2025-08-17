@@ -4,7 +4,7 @@ FastAPI backend for MNR Form processing
 Updated with OpenAI integration achieving 92% accuracy
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -14,7 +14,12 @@ import os
 import tempfile
 import shutil
 import logging
+import asyncio
+import urllib.parse
 from pathlib import Path
+
+# Import progress tracking
+from progress_tracker import progress_tracker, ProgressCallback, ProgressStage
 
 # Import modular pipeline components
 try:
@@ -339,19 +344,85 @@ async def generate_filled_pdf(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/create-progress-session")
+async def create_progress_session():
+    """Create a new progress tracking session"""
+    session_id = progress_tracker.create_session()
+    return {"session_id": session_id}
+
+@app.websocket("/ws/progress/{session_id}")
+async def websocket_progress(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for real-time progress updates"""
+    await websocket.accept()
+    
+    try:
+        progress_tracker.register_websocket(session_id, websocket)
+        
+        # Send current progress if session exists
+        current_progress = progress_tracker.get_session_progress(session_id)
+        if current_progress:
+            # Send latest update
+            updates = current_progress.get("updates", [])
+            if updates:
+                latest_update = updates[-1]
+                await websocket.send_text(json.dumps(latest_update.to_dict()))
+        
+        # Keep connection alive
+        while True:
+            try:
+                # Wait for ping or other messages
+                await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        progress_tracker.unregister_websocket(session_id)
+
 @app.post("/api/process-complete")
 async def process_complete_pipeline(
     file: UploadFile = File(...),
     method: str = Query("openai", description="Processing method: 'openai', 'auto', or 'legacy'"),
     output_format: str = Query("mnr", description="Output format: 'mnr' or 'ash'"),
-    enhanced: bool = Query(True, description="Use enhanced PDF filler")
+    enhanced: bool = Query(True, description="Use enhanced PDF filler"),
+    session_id: Optional[str] = Query(None, description="Progress tracking session ID")
 ):
     """Complete pipeline: Upload MNR -> Extract -> Generate Filled PDF using modular pipeline"""
+    
+    # Initialize progress tracking
+    progress_callback = None
+    if session_id:
+        progress_callback = ProgressCallback(session_id, progress_tracker)
+        progress_tracker.update_progress(
+            session_id, 
+            ProgressStage.UPLOAD, 
+            0.05, 
+            "File uploaded successfully, preparing for processing"
+        )
+    
     try:
-        # Save uploaded file
+        # Save uploaded file with original name for later reference
+        original_filename = file.filename or f"uploaded_{os.urandom(4).hex()}.pdf"
+        original_path = UPLOAD_DIR / original_filename
+        
+        # Save a temporary file for processing
         temp_path = UPLOAD_DIR / f"temp_{os.urandom(4).hex()}.pdf"
+        
         with temp_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            content = file.file.read()
+            buffer.write(content)
+        
+        # Also save with original name for side-by-side viewing
+        with original_path.open("wb") as buffer:
+            buffer.write(content)
+        
+        if progress_callback:
+            progress_tracker.update_progress(
+                session_id, 
+                ProgressStage.UPLOAD, 
+                0.1, 
+                "File saved, initializing processing pipeline"
+            )
         
         logger.info(f"🚀 Starting complete modular pipeline: method={method}, output={output_format}, enhanced={enhanced}")
         
@@ -366,6 +437,10 @@ async def process_complete_pipeline(
                 include_metadata=True
             )
             
+            # Start processing with progress tracking
+            if progress_callback:
+                progress_callback.on_extraction_start(method)
+                
             # Process with modular pipeline
             result = process_medical_form(
                 pdf_path=str(temp_path),
@@ -374,12 +449,64 @@ async def process_complete_pipeline(
                 config=config.to_dict()
             )
             
+            # Update progress based on result
+            if progress_callback:
+                if result.extraction_result:
+                    progress_callback.on_extraction_complete(
+                        result.fields_extracted or 0,
+                        result.total_cost or 0.0,
+                        result.total_processing_time or 0.0
+                    )
+                    progress_callback.on_processing_start(output_format)
+                    progress_callback.on_processing_complete()
+                    progress_callback.on_pdf_generation_start(output_format)
+                    
+                if result.success:
+                    progress_callback.on_pdf_generation_complete(
+                        result.fields_filled or 0,
+                        result.output_pdf or ""
+                    )
+                    
+                    # Start finalization process
+                    progress_callback.on_finalization_start()
+            
             # Clean up temp file
             temp_path.unlink()
             
             if result.success:
                 # Get the output filename for download
                 output_filename = os.path.basename(result.output_pdf) if result.output_pdf else None
+                
+                # Progress update for response preparation
+                if progress_callback:
+                    progress_callback.on_finalization_progress(0.3, "Preparing download URLs")
+                
+                # Progress update for metadata preparation
+                if progress_callback:
+                    progress_callback.on_finalization_progress(0.7, "Preparing metadata")
+                
+                # Final progress update
+                if progress_callback:
+                    progress_callback.on_finalization_progress(1.0, "Finalizing response data")
+                
+                    response_data = {
+                        "success": True,
+                        "message": f"Processing complete - {output_format.upper()} PDF generated",
+                        "extracted_data": result.extraction_result.data if result.extraction_result else None,
+                        "method_used": result.extraction_result.method_used if result.extraction_result else "unknown",
+                        "output_format": output_format,
+                        "enhanced_filling": enhanced,
+                        "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}" if output_filename else None,
+                        "original_file_url": f"/api/uploads/{urllib.parse.quote(original_filename)}",
+                        "original_filename": original_filename,
+                        "metadata": result.pipeline_metadata,
+                        "processing_time": result.total_processing_time,
+                        "fields_extracted": result.fields_extracted,
+                        "fields_filled": result.fields_filled,
+                        "cost": result.total_cost
+                    }
+                    progress_callback.on_finalization_complete()
+                    progress_callback.on_pipeline_complete(response_data)
                 
                 return {
                     "success": True,
@@ -388,14 +515,24 @@ async def process_complete_pipeline(
                     "method_used": result.extraction_result.method_used if result.extraction_result else "unknown",
                     "output_format": output_format,
                     "enhanced_filling": enhanced,
-                    "pdf_url": f"/api/download/{output_filename}" if output_filename else None,
+                    "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}" if output_filename else None,
+                    "original_file_url": f"/api/uploads/{urllib.parse.quote(original_filename)}",
+                    "original_filename": original_filename,
                     "metadata": result.pipeline_metadata,
                     "processing_time": result.total_processing_time,
                     "fields_extracted": result.fields_extracted,
                     "fields_filled": result.fields_filled,
-                    "cost": result.total_cost
+                    "cost": result.total_cost,
+                    "session_id": session_id
                 }
             else:
+                # Pipeline failed - update progress
+                if progress_callback:
+                    progress_callback.on_pipeline_error(
+                        result.error or "Unknown pipeline error",
+                        result.stage_reached.value if result.stage_reached else "unknown"
+                    )
+                
                 raise HTTPException(
                     status_code=500, 
                     detail=f"Pipeline failed at {result.stage_reached.value}: {result.error}"
@@ -488,7 +625,7 @@ async def process_complete_pipeline(
                 "method_used": method_used,
                 "output_format": output_format,
                 "enhanced_filling": enhanced,
-                "pdf_url": f"/api/download/{output_filename}",
+                "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}",
                 "metadata": extracted_data.get('_metadata') if extracted_data else None
             }
         else:
@@ -498,6 +635,11 @@ async def process_complete_pipeline(
         # Clean up on error
         if 'temp_path' in locals() and temp_path.exists():
             temp_path.unlink()
+        
+        # Update progress on error
+        if progress_callback:
+            progress_callback.on_pipeline_error(str(e), "unknown")
+        
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/download/{filename}")
@@ -510,7 +652,32 @@ async def download_pdf(filename: str):
     return FileResponse(
         path=str(file_path),
         filename=filename,
-        media_type="application/pdf"
+        media_type="application/pdf",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET",
+            "Access-Control-Allow-Headers": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin"
+        }
+    )
+
+@app.get("/api/uploads/{filename}")
+async def get_uploaded_file(filename: str):
+    """Serve uploaded PDF files"""
+    file_path = UPLOAD_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Original file not found")
+    
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type="application/pdf",
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET",
+            "Access-Control-Allow-Headers": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin"
+        }
     )
 
 @app.get("/api/forms")
