@@ -384,7 +384,7 @@ async def websocket_progress(websocket: WebSocket, session_id: str):
 async def process_complete_pipeline(
     file: UploadFile = File(...),
     method: str = Query("openai", description="Processing method: 'openai', 'auto', or 'legacy'"),
-    output_format: str = Query("mnr", description="Output format: 'mnr' or 'ash'"),
+    output_format: str = Query("both", description="Output format: 'mnr', 'ash', or 'both'"),
     enhanced: bool = Query(True, description="Use enhanced PDF filler"),
     session_id: Optional[str] = Query(None, description="Progress tracking session ID")
 ):
@@ -443,12 +443,45 @@ async def process_complete_pipeline(
                 progress_callback.on_extraction_start(method)
                 
             # Process with modular pipeline
-            result = process_medical_form(
-                pdf_path=str(temp_path),
-                output_format=output_format.lower(),
-                extraction_method=method.lower(),
-                config=config.to_dict()
-            )
+            if output_format.lower() == "both":
+                # Generate both MNR and ASH forms
+                logger.info("📄 Generating both MNR and ASH forms")
+                
+                # First generate MNR
+                config.output_format = "mnr"
+                mnr_result = process_medical_form(
+                    pdf_path=str(temp_path),
+                    output_format="mnr",
+                    extraction_method=method.lower(),
+                    config=config.to_dict()
+                )
+                
+                # Then generate ASH
+                config.output_format = "ash"
+                ash_result = process_medical_form(
+                    pdf_path=str(temp_path),
+                    output_format="ash",
+                    extraction_method=method.lower(),
+                    config=config.to_dict()
+                )
+                
+                # Combine results
+                result = mnr_result  # Use MNR as primary result
+                if mnr_result.success and ash_result.success:
+                    # Add ASH PDF URL to result
+                    ash_filename = os.path.basename(ash_result.output_pdf) if ash_result.output_pdf else None
+                    mnr_filename = os.path.basename(mnr_result.output_pdf) if mnr_result.output_pdf else None
+                    result.ash_pdf = ash_result.output_pdf
+                    result.ash_filename = ash_filename
+                    result.mnr_filename = mnr_filename
+            else:
+                # Single format generation
+                result = process_medical_form(
+                    pdf_path=str(temp_path),
+                    output_format=output_format.lower(),
+                    extraction_method=method.lower(),
+                    config=config.to_dict()
+                )
             
             # Update progress based on result
             if progress_callback:
@@ -509,7 +542,7 @@ async def process_complete_pipeline(
                     progress_callback.on_finalization_complete()
                     progress_callback.on_pipeline_complete(response_data)
                 
-                return {
+                response = {
                     "success": True,
                     "message": f"Processing complete - {output_format.upper()} PDF generated with modular pipeline",
                     "extracted_data": result.extraction_result.data if result.extraction_result else None,
@@ -526,6 +559,14 @@ async def process_complete_pipeline(
                     "cost": result.total_cost,
                     "session_id": session_id
                 }
+                
+                # Add both PDF URLs if both forms were generated
+                if output_format.lower() == "both" and hasattr(result, 'ash_filename') and hasattr(result, 'mnr_filename'):
+                    response["mnr_pdf_url"] = f"/api/download/{urllib.parse.quote(result.mnr_filename)}" if result.mnr_filename else None
+                    response["ash_pdf_url"] = f"/api/download/{urllib.parse.quote(result.ash_filename)}" if result.ash_filename else None
+                    response["pdf_url"] = response["mnr_pdf_url"]  # Keep MNR as default
+                
+                return response
             else:
                 # Pipeline failed - update progress
                 if progress_callback:
@@ -952,7 +993,7 @@ def convert_frontend_to_backend_format(frontend_data: dict) -> dict:
 @app.post("/api/update-pdf")
 async def update_pdf_with_corrections(
     corrected_data: dict,
-    output_format: str = Query("mnr", description="Output format: 'mnr' or 'ash'"),
+    output_format: str = Query("both", description="Output format: 'mnr', 'ash', or 'both'"),
     enhanced: bool = Query(True, description="Use enhanced PDF filler")
 ):
     """Update and regenerate PDF with user corrections"""
@@ -971,41 +1012,116 @@ async def update_pdf_with_corrections(
         backend_format_data = convert_frontend_to_backend_format(corrected_data)
         logger.info(f"🔄 Converted to backend format with keys: {list(backend_format_data.keys())}")
         
-        # Generate new PDF with corrected data
-        output_filename = f"corrected_{os.urandom(4).hex()}_{output_format}_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        output_path = OUTPUT_DIR / output_filename
+        response = {
+            "success": True,
+            "output_format": output_format,
+            "enhanced_filling": enhanced,
+            "corrected_data": backend_format_data  # Return the converted data structure
+        }
         
-        if output_format == "mnr":
-            # Use MNR PDF filler with converted backend data structure
+        if output_format.lower() == "both":
+            # Generate both MNR and ASH forms
+            logger.info("📄 Generating both MNR and ASH forms with corrections")
+            
+            # Generate MNR
+            mnr_filename = f"corrected_{os.urandom(4).hex()}_mnr_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            mnr_path = OUTPUT_DIR / mnr_filename
+            mnr_template = TEMPLATE_DIR / "mnr_form.pdf"
+            
+            mnr_result = fill_mnr_pdf(
+                data=backend_format_data,
+                template_path=str(mnr_template),
+                output_path=str(mnr_path)
+            )
+            
+            # Generate ASH (map data to ASH format first)
+            from pipeline.json_processor import ASHJSONMapper
+            ash_mapper = ASHJSONMapper()
+            ash_data_result = ash_mapper.process(backend_format_data)
+            
+            ash_filename = f"corrected_{os.urandom(4).hex()}_ash_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            ash_path = OUTPUT_DIR / ash_filename
+            ash_template = TEMPLATE_DIR / "ash_medical_form.pdf"
+            
+            if ash_data_result.success:
+                ash_result = fill_ash_pdf(
+                    data=ash_data_result.data,
+                    template_path=str(ash_template),
+                    output_path=str(ash_path)
+                )
+            else:
+                ash_result = None
+            
+            if mnr_result.success and ash_result and ash_result.success:
+                logger.info(f"✅ Both PDFs regenerated successfully")
+                logger.info(f"📊 MNR fields filled: {mnr_result.fields_filled}, ASH fields filled: {ash_result.fields_filled}")
+                
+                response.update({
+                    "message": "Both MNR and ASH PDFs updated successfully with corrections",
+                    "mnr_pdf_url": f"/api/download/{urllib.parse.quote(mnr_filename)}",
+                    "ash_pdf_url": f"/api/download/{urllib.parse.quote(ash_filename)}",
+                    "pdf_url": f"/api/download/{urllib.parse.quote(mnr_filename)}",  # Default to MNR
+                    "mnr_fields_filled": mnr_result.fields_filled,
+                    "ash_fields_filled": ash_result.fields_filled,
+                    "fields_filled": mnr_result.fields_filled  # Default to MNR
+                })
+            else:
+                raise HTTPException(status_code=500, detail="Failed to generate one or both PDFs")
+                
+        elif output_format == "mnr":
+            # Generate MNR only
+            output_filename = f"corrected_{os.urandom(4).hex()}_mnr_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            output_path = OUTPUT_DIR / output_filename
             template_path = TEMPLATE_DIR / "mnr_form.pdf"
+            
             result = fill_mnr_pdf(
                 data=backend_format_data,
                 template_path=str(template_path),
                 output_path=str(output_path)
             )
-        else:
-            # Use ASH PDF filler with converted backend data structure
+            
+            if result.success:
+                logger.info(f"✅ MNR PDF regenerated successfully: {output_filename}")
+                logger.info(f"📊 Fields filled: {result.fields_filled}")
+                response.update({
+                    "message": "MNR PDF updated successfully with corrections",
+                    "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}",
+                    "fields_filled": result.fields_filled
+                })
+            else:
+                raise HTTPException(status_code=500, detail=f"PDF generation failed: {result.error}")
+                
+        else:  # ASH format
+            # Map data to ASH format
+            from pipeline.json_processor import ASHJSONMapper
+            ash_mapper = ASHJSONMapper()
+            ash_data_result = ash_mapper.process(backend_format_data)
+            
+            if not ash_data_result.success:
+                raise HTTPException(status_code=500, detail="Failed to map data to ASH format")
+            
+            output_filename = f"corrected_{os.urandom(4).hex()}_ash_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+            output_path = OUTPUT_DIR / output_filename
             template_path = TEMPLATE_DIR / "ash_medical_form.pdf"
+            
             result = fill_ash_pdf(
-                data=backend_format_data,
+                data=ash_data_result.data,
                 template_path=str(template_path),
                 output_path=str(output_path)
             )
+            
+            if result.success:
+                logger.info(f"✅ ASH PDF regenerated successfully: {output_filename}")
+                logger.info(f"📊 Fields filled: {result.fields_filled}")
+                response.update({
+                    "message": "ASH PDF updated successfully with corrections",
+                    "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}",
+                    "fields_filled": result.fields_filled
+                })
+            else:
+                raise HTTPException(status_code=500, detail=f"PDF generation failed: {result.error}")
         
-        if result.success:
-            logger.info(f"✅ PDF regenerated successfully: {output_filename}")
-            logger.info(f"📊 Fields filled: {result.fields_filled}")
-            return {
-                "success": True,
-                "message": f"PDF updated successfully with corrections",
-                "pdf_url": f"/api/download/{urllib.parse.quote(output_filename)}",
-                "fields_filled": result.fields_filled,
-                "output_format": output_format,
-                "enhanced_filling": enhanced,
-                "corrected_data": backend_format_data  # Return the converted data structure
-            }
-        else:
-            raise HTTPException(status_code=500, detail=f"PDF generation failed: {result.error}")
+        return response
             
     except Exception as e:
         logger.error(f"❌ PDF update failed: {e}")
