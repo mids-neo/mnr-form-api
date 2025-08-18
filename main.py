@@ -782,10 +782,57 @@ async def get_processor_stats():
         raise HTTPException(status_code=500, detail=str(e))
 
 def convert_frontend_to_backend_format(frontend_data: dict) -> dict:
-    """Convert flat frontend form data to nested backend JSON structure expected by PDF filler"""
+    """Convert flat frontend form data to backend format expected by PDF filler"""
     backend_data = {}
     
-    # Basic string fields (direct mapping)
+    # Detect form type based on field names
+    has_ash_fields = any(key.startswith(('patient_', 'pcp_', 'clinic_', 'condition_', 'subscriber_')) for key in frontend_data.keys())
+    has_mnr_fields = any(key in ['primary_care_physician', 'physician_phone', 'pain_level_average'] for key in frontend_data.keys())
+    
+    if has_ash_fields and not has_mnr_fields:
+        logger.info("🔍 Detected ASH form data - using direct mapping")
+        # ASH forms use a flat structure - copy most fields directly
+        # Only process phone field parsing
+        for key, value in frontend_data.items():
+            if key.endswith('_combined'):
+                # Handle combined phone fields by parsing them
+                if value:
+                    # Parse phone number
+                    digits = ''.join(filter(str.isdigit, str(value)))
+                    if len(digits) >= 10:
+                        # Full 10+ digit number
+                        area_code = digits[:3]
+                        phone = digits[3:10]
+                    elif len(digits) >= 7:
+                        # 7+ digit number without area code
+                        area_code = ''
+                        phone = digits[:7]
+                    else:
+                        # Less than 7 digits
+                        area_code = ''
+                        phone = digits
+                    
+                    # Map to separate fields based on combined field name
+                    if key == 'patient_phone_combined':
+                        backend_data['patient_area_code'] = area_code
+                        backend_data['patient_phone'] = phone
+                    elif key == 'pcp_phone_combined':
+                        backend_data['pcp_area_code'] = area_code
+                        backend_data['pcp_phone'] = phone
+                    elif key == 'clinic_phone_combined':
+                        backend_data['clinic_area_code'] = area_code
+                        backend_data['clinic_phone'] = phone
+                    elif key == 'fax_combined':
+                        backend_data['fax_area_code'] = area_code
+                        backend_data['fax_number'] = phone
+            elif not key.endswith('_combined'):
+                # Copy all non-combined fields directly
+                backend_data[key] = value
+        
+        return backend_data
+    
+    logger.info("🔍 Detected MNR form data - using nested structure mapping")
+    # MNR form fields (nested structure conversion)
     string_field_mapping = {
         'primary_care_physician': 'Primary_Care_Physician',
         'physician_phone': 'Physician_Phone',
