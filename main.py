@@ -740,6 +740,215 @@ async def get_processor_stats():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def convert_frontend_to_backend_format(frontend_data: dict) -> dict:
+    """Convert flat frontend form data to nested backend JSON structure expected by PDF filler"""
+    backend_data = {}
+    
+    # Basic string fields (direct mapping)
+    string_field_mapping = {
+        'primary_care_physician': 'Primary_Care_Physician',
+        'physician_phone': 'Physician_Phone',
+        'employer': 'Employer',
+        'job_description': 'Job_Description',
+        'current_health_problems': 'Current_Health_Problems',
+        'when_began': 'When_Began',
+        'how_happened': 'How_Happened',
+        'pain_medication': 'Pain_Medication',
+        'health_history': 'Health_History',
+        'todays_date': 'Date',
+        'signature': 'Signature'
+    }
+    
+    for frontend_key, backend_key in string_field_mapping.items():
+        if frontend_data.get(frontend_key):
+            backend_data[backend_key] = frontend_data[frontend_key]
+    
+    # Under physician care (convert string to nested object)
+    if frontend_data.get('under_physician_care'):
+        under_care_value = frontend_data['under_physician_care']
+        backend_data['Under_Physician_Care'] = {
+            'Yes': under_care_value == 'Yes',
+            'No': under_care_value == 'No',
+            'Conditions': frontend_data.get('conditions', '') if under_care_value == 'Yes' else None
+        }
+    
+    # Pain levels (convert flat to nested with /10 format)
+    pain_fields = ['pain_level_average', 'pain_level_worst', 'pain_level_current']
+    if any(frontend_data.get(field) for field in pain_fields):
+        backend_data['Pain_Level'] = {}
+        
+        if frontend_data.get('pain_level_average'):
+            backend_data['Pain_Level']['Average_Past_Week'] = f"{frontend_data['pain_level_average']}/10"
+        
+        if frontend_data.get('pain_level_worst'):
+            backend_data['Pain_Level']['Worst_Past_Week'] = f"{frontend_data['pain_level_worst']}/10"
+        
+        if frontend_data.get('pain_level_current'):
+            backend_data['Pain_Level']['Current'] = f"{frontend_data['pain_level_current']}/10"
+    
+    # Daily activity interference (convert to string)
+    if frontend_data.get('daily_activity_interference'):
+        backend_data['Daily_Activity_Interference'] = str(frontend_data['daily_activity_interference'])
+    
+    # Symptoms past week (convert string to object)
+    if frontend_data.get('symptoms_past_week'):
+        backend_data['Symptoms_Past_Week_Percentage'] = {
+            frontend_data['symptoms_past_week']: True
+        }
+    
+    # Treatment received (convert array to object)
+    if frontend_data.get('treatments_received'):
+        backend_data['Treatment_Received'] = {}
+        treatment_mapping = {
+            'Surgery': 'Surgery',
+            'Medications': 'Medications', 
+            'Physical Therapy': 'Physical_Therapy',
+            'Chiropractic': 'Chiropractic',
+            'Massage': 'Massage',
+            'Injections': 'Injections'
+        }
+        
+        for treatment in frontend_data['treatments_received']:
+            backend_key = treatment_mapping.get(treatment, treatment.replace(' ', '_'))
+            backend_data['Treatment_Received'][backend_key] = True
+        
+        # Handle other treatment text
+        if frontend_data.get('treatment_other_text'):
+            backend_data['Treatment_Received']['Other'] = frontend_data['treatment_other_text']
+    
+    # New complaints (convert string + text to object)
+    if frontend_data.get('new_complaints'):
+        backend_data['New_Complaints'] = {
+            'Yes': frontend_data['new_complaints'] == 'Yes',
+            'No': frontend_data['new_complaints'] == 'No',
+            'Explain': frontend_data.get('new_complaints_text', '') if frontend_data['new_complaints'] == 'Yes' else None
+        }
+    
+    # Re-injuries (convert string + text to object)
+    if frontend_data.get('re_injuries'):
+        backend_data['Re_Injuries'] = {
+            'Yes': frontend_data['re_injuries'] == 'Yes',
+            'No': frontend_data['re_injuries'] == 'No',
+            'Explain': frontend_data.get('re_injuries_text', '') if frontend_data['re_injuries'] == 'Yes' else None
+        }
+    
+    # Type of treatments (convert array to object)
+    if frontend_data.get('type_of_treatments'):
+        backend_data['Helpful_Treatments'] = {}
+        treatment_mapping = {
+            'Acupuncture': 'Acupuncture',
+            'Chinese Herbs': 'Chinese_Herbs',
+            'Massage Therapy': 'Massage_Therapy',
+            'Nutritional Supplements': 'Nutritional_Supplements',
+            'Prescription Medication(s)': 'Prescription_Medications',
+            'Physical Therapy': 'Physical_Therapy',
+            'Rehab / Home Care': 'Rehab_Home_Care',
+            'Spinal Adjustment / Manipulation': 'Spinal_Adjustment_Manipulation'
+        }
+        
+        for treatment in frontend_data['type_of_treatments']:
+            backend_key = treatment_mapping.get(treatment, treatment.replace(' ', '_').replace('/', '_'))
+            backend_data['Helpful_Treatments'][backend_key] = True
+        
+        if frontend_data.get('type_of_treatments_other_text'):
+            backend_data['Helpful_Treatments']['Other'] = frontend_data['type_of_treatments_other_text']
+    
+    # Activities (convert flat fields to array of objects)
+    activities = []
+    for i in range(1, 4):  # activities 1-3
+        activity = frontend_data.get(f'activity_{i}')
+        measurement = frontend_data.get(f'measurement_{i}')
+        change = frontend_data.get(f'change_{i}')
+        
+        if activity or measurement or change:
+            activities.append({
+                'Activity': activity or '',
+                'Measurement': measurement or '',
+                'How_has_changed': change or ''
+            })
+    
+    if activities:
+        backend_data['Activities_Monitored'] = activities
+    
+    # Pain quality (convert array to object)
+    if frontend_data.get('pain_quality'):
+        backend_data['Pain_Quality'] = {}
+        for quality in frontend_data['pain_quality']:
+            backend_data['Pain_Quality'][quality] = True
+    
+    # Progress since acupuncture (convert array to object)
+    if frontend_data.get('progress_acupuncture'):
+        backend_data['Progress_Since_Acupuncture'] = {}
+        for progress in frontend_data['progress_acupuncture']:
+            backend_data['Progress_Since_Acupuncture'][progress] = True
+    
+    # Relief duration (convert flat fields to object)
+    relief_fields = ['relief_duration_hours', 'relief_duration_days', 'relief_duration_hours_number', 'relief_duration_days_number']
+    if any(frontend_data.get(field) for field in relief_fields):
+        backend_data['Relief_Duration'] = {}
+        
+        if frontend_data.get('relief_duration_hours'):
+            backend_data['Relief_Duration']['Hours'] = True
+            if frontend_data.get('relief_duration_hours_number'):
+                backend_data['Relief_Duration']['Hours_Number'] = int(frontend_data['relief_duration_hours_number'])
+        
+        if frontend_data.get('relief_duration_days'):
+            backend_data['Relief_Duration']['Days'] = True
+            if frontend_data.get('relief_duration_days_number'):
+                backend_data['Relief_Duration']['Days_Number'] = int(frontend_data['relief_duration_days_number'])
+    
+    # Treatment course (convert array to object)
+    if frontend_data.get('treatment_course'):
+        backend_data['Upcoming_Treatment_Course'] = {}
+        course_mapping = {
+            '1/week': '1_per_week',
+            '2/week': '2_per_week'
+        }
+        
+        for course in frontend_data['treatment_course']:
+            backend_key = course_mapping.get(course, course.replace('/', '_per_'))
+            backend_data['Upcoming_Treatment_Course'][backend_key] = True
+    
+    # Height (convert flat fields to object)
+    if frontend_data.get('height_feet') or frontend_data.get('height_inches'):
+        backend_data['Height'] = {
+            'feet': int(frontend_data['height_feet']) if frontend_data.get('height_feet') else None,
+            'inches': int(frontend_data['height_inches']) if frontend_data.get('height_inches') else None
+        }
+    
+    # Weight (convert to number)
+    if frontend_data.get('weight'):
+        try:
+            backend_data['Weight_lbs'] = int(frontend_data['weight'])
+        except (ValueError, TypeError):
+            pass
+    
+    # Blood pressure (convert flat fields to object)
+    if frontend_data.get('blood_pressure_systolic') or frontend_data.get('blood_pressure_diastolic'):
+        backend_data['Blood_Pressure'] = {}
+        if frontend_data.get('blood_pressure_systolic'):
+            try:
+                backend_data['Blood_Pressure']['systolic'] = int(frontend_data['blood_pressure_systolic'])
+            except (ValueError, TypeError):
+                pass
+        if frontend_data.get('blood_pressure_diastolic'):
+            try:
+                backend_data['Blood_Pressure']['diastolic'] = int(frontend_data['blood_pressure_diastolic'])
+            except (ValueError, TypeError):
+                pass
+    
+    # Pregnant (convert string to object)
+    if frontend_data.get('pregnant'):
+        backend_data['Pregnant'] = {
+            'Yes': frontend_data['pregnant'] == 'Yes',
+            'No': frontend_data['pregnant'] == 'No'
+        }
+        
+        if frontend_data.get('pregnancy_physician') and frontend_data['pregnant'] == 'Yes':
+            backend_data['Pregnant']['Physician'] = frontend_data['pregnancy_physician']
+    
+    return backend_data
+
 @app.post("/api/update-pdf")
 async def update_pdf_with_corrections(
     corrected_data: dict,
@@ -749,6 +958,7 @@ async def update_pdf_with_corrections(
     """Update and regenerate PDF with user corrections"""
     try:
         logger.info(f"🔄 Regenerating PDF with user corrections: format={output_format}, enhanced={enhanced}")
+        logger.info(f"📥 Received frontend data keys: {list(corrected_data.keys())}")
         
         if not PIPELINE_AVAILABLE:
             raise HTTPException(status_code=503, detail="Pipeline not available")
@@ -757,32 +967,34 @@ async def update_pdf_with_corrections(
         from pipeline.mnr_pdf_filler import fill_mnr_pdf
         from pipeline.ash_pdf_filler import fill_ash_pdf
         
-        # Use the corrected data directly - no JSON processing pipeline
-        # The corrected_data should be the updated original extracted data structure
+        # Convert frontend flat structure to backend nested structure
+        backend_format_data = convert_frontend_to_backend_format(corrected_data)
+        logger.info(f"🔄 Converted to backend format with keys: {list(backend_format_data.keys())}")
         
         # Generate new PDF with corrected data
         output_filename = f"corrected_{os.urandom(4).hex()}_{output_format}_filled_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         output_path = OUTPUT_DIR / output_filename
         
         if output_format == "mnr":
-            # Use MNR PDF filler with original data structure
+            # Use MNR PDF filler with converted backend data structure
             template_path = TEMPLATE_DIR / "mnr_form.pdf"
             result = fill_mnr_pdf(
-                data=corrected_data,
+                data=backend_format_data,
                 template_path=str(template_path),
                 output_path=str(output_path)
             )
         else:
-            # Use ASH PDF filler with original data structure
+            # Use ASH PDF filler with converted backend data structure
             template_path = TEMPLATE_DIR / "ash_medical_form.pdf"
             result = fill_ash_pdf(
-                data=corrected_data,
+                data=backend_format_data,
                 template_path=str(template_path),
                 output_path=str(output_path)
             )
         
         if result.success:
             logger.info(f"✅ PDF regenerated successfully: {output_filename}")
+            logger.info(f"📊 Fields filled: {result.fields_filled}")
             return {
                 "success": True,
                 "message": f"PDF updated successfully with corrections",
@@ -790,7 +1002,7 @@ async def update_pdf_with_corrections(
                 "fields_filled": result.fields_filled,
                 "output_format": output_format,
                 "enhanced_filling": enhanced,
-                "corrected_data": corrected_data
+                "corrected_data": backend_format_data  # Return the converted data structure
             }
         else:
             raise HTTPException(status_code=500, detail=f"PDF generation failed: {result.error}")
