@@ -986,9 +986,31 @@ class ASHFormFieldMapper:
 
 # Convenience functions
 def fill_ash_pdf(data: Dict[str, Any], template_path: str, output_path: str) -> ASHFillingResult:
-    """Fill ASH PDF with data"""
-    filler = ASHPDFFiller()
-    return filler.fill_pdf(data, template_path, output_path)
+    """Fill ASH PDF with data - OPTIMIZED VERSION"""
+    try:
+        # Try to use optimized filler first
+        from .optimized_ash_filler import OptimizedASHPDFFiller
+        
+        optimized_filler = OptimizedASHPDFFiller(template_path)
+        optimized_result = optimized_filler.fill_pdf(data, output_path)
+        
+        # Convert optimized result to legacy format for backward compatibility
+        return ASHFillingResult(
+            success=optimized_result.success,
+            output_path=optimized_result.output_path,
+            fields_filled=optimized_result.fields_filled,
+            total_fields=optimized_result.total_fields,
+            error=optimized_result.error,
+            processing_time=optimized_result.processing_time,
+            method_used=f"optimized-{optimized_result.method_used}",
+            warnings=optimized_result.warnings
+        )
+        
+    except Exception as e:
+        # Fallback to legacy filler
+        logger.warning(f"Optimized ASH filler failed, using legacy: {e}")
+        filler = ASHPDFFiller()
+        return filler.fill_pdf(data, template_path, output_path)
 
 def map_mnr_to_ash_format(mnr_data: Dict[str, Any]) -> Dict[str, Any]:
     """Map MNR data to ASH format"""

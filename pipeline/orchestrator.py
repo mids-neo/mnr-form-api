@@ -19,6 +19,7 @@ from .ocr_extraction import ExtractionOrchestrator, ExtractionResult
 from .json_processor import JSONProcessorOrchestrator, ProcessingResult
 from .mnr_pdf_filler import MNRPDFFiller, FillingResult
 from .ash_pdf_filler import ASHPDFFiller, ASHFormFieldMapper, ASHFillingResult
+from .optimized_ash_filler import OptimizedASHPDFFiller, OptimizedASHFillingResult
 
 logger = logging.getLogger(__name__)
 

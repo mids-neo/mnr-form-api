@@ -48,6 +48,18 @@ from .ash_pdf_filler import (
     check_ash_filler_availability
 )
 
+from .optimized_ash_filler import (
+    OptimizedASHFillingResult,
+    OptimizedASHPDFFiller,
+    create_optimized_ash_filler
+)
+
+from .optimized_ash_mapper import (
+    OptimizedASHFormFieldMapper,
+    FieldMappingResult,
+    create_optimized_ash_mapper
+)
+
 from .orchestrator import (
     PipelineResult,
     MedicalFormPipeline,
@@ -93,6 +105,14 @@ __all__ = [
     'fill_ash_pdf',
     'map_mnr_to_ash_format',
     'check_ash_filler_availability',
+    
+    # Optimized ASH PDF Filling
+    'OptimizedASHFillingResult',
+    'OptimizedASHPDFFiller',
+    'create_optimized_ash_filler',
+    'OptimizedASHFormFieldMapper',
+    'FieldMappingResult',
+    'create_optimized_ash_mapper',
     
     # Pipeline Orchestration
     'PipelineResult',
