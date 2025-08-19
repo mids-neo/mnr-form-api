@@ -195,14 +195,24 @@ CRITICAL EXTRACTION RULES:
 Extract comprehensively and accurately from the ACTUAL FORM IMAGE.
 """
     
-    def _pdf_to_base64_image(self, pdf_path: str) -> str:
-        """Convert PDF to optimized base64 image"""
+    def _file_to_base64_image(self, file_path: str) -> str:
+        """Convert PDF or image file to optimized base64 image"""
         try:
-            images = pdf2image.convert_from_path(pdf_path, dpi=self.config['dpi'])
-            if not images:
-                raise ValueError("No images extracted from PDF")
+            file_ext = os.path.splitext(file_path)[1].lower()
             
-            image = images[0]
+            if file_ext == '.pdf':
+                # Handle PDF files
+                images = pdf2image.convert_from_path(file_path, dpi=self.config['dpi'])
+                if not images:
+                    raise ValueError("No images extracted from PDF")
+                image = images[0]
+            else:
+                # Handle image files directly
+                image = Image.open(file_path)
+                # Convert to RGB if necessary (for CMYK, grayscale, etc.)
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                logger.info(f"Processing image file: {file_ext} format")
             
             # Optimize image size for API efficiency
             max_size = 15_000_000
@@ -219,8 +229,12 @@ Extract comprehensively and accurately from the ACTUAL FORM IMAGE.
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
             
         except Exception as e:
-            logger.error(f"PDF conversion failed: {e}")
+            logger.error(f"File conversion failed: {e}")
             raise
+    
+    def _pdf_to_base64_image(self, pdf_path: str) -> str:
+        """Convert PDF to optimized base64 image (deprecated - use _file_to_base64_image)"""
+        return self._file_to_base64_image(pdf_path)
     
     def _calculate_cost(self, tokens: int) -> float:
         """Calculate accurate API cost"""
@@ -243,8 +257,8 @@ Extract comprehensively and accurately from the ACTUAL FORM IMAGE.
         try:
             logger.info(f"🔍 OpenAI extraction: {os.path.basename(pdf_path)}")
             
-            # Convert PDF to image
-            image_base64 = self._pdf_to_base64_image(pdf_path)
+            # Convert file (PDF or image) to base64
+            image_base64 = self._file_to_base64_image(pdf_path)
             
             # Create API request
             messages = [{
@@ -385,16 +399,27 @@ class LegacyOCRExtractor(BaseExtractor):
         
         return default_config
     
-    def _extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Extract text using legacy OCR"""
+    def _extract_text_from_file(self, file_path: str) -> str:
+        """Extract text using legacy OCR from PDF or image file"""
         try:
-            # Convert PDF to images
-            images = pdf2image.convert_from_path(pdf_path, dpi=self.config['dpi'])
-            if not images:
-                return ""
+            file_ext = os.path.splitext(file_path)[1].lower()
             
-            # OCR first page
-            image = images[0]
+            if file_ext == '.pdf':
+                # Convert PDF to images
+                images = pdf2image.convert_from_path(file_path, dpi=self.config['dpi'])
+                if not images:
+                    return ""
+                image = images[0]
+            else:
+                # Handle image files directly
+                from PIL import Image
+                image = Image.open(file_path)
+                # Convert to RGB if necessary
+                if image.mode != 'RGB':
+                    image = image.convert('RGB')
+                logger.info(f"Processing image file: {file_ext} format")
+            
+            # Convert to numpy array for OCR
             image_np = np.array(image)
             
             # Convert to grayscale
@@ -408,6 +433,10 @@ class LegacyOCRExtractor(BaseExtractor):
         except Exception as e:
             logger.error(f"Legacy OCR failed: {e}")
             return ""
+    
+    def _extract_text_from_pdf(self, pdf_path: str) -> str:
+        """Extract text using legacy OCR (deprecated - use _extract_text_from_file)"""
+        return self._extract_text_from_file(pdf_path)
     
     def _parse_ocr_text(self, text: str) -> Dict[str, Any]:
         """Parse OCR text into structured data using regex patterns"""
@@ -485,8 +514,8 @@ class LegacyOCRExtractor(BaseExtractor):
         try:
             logger.info(f"🔧 Legacy OCR extraction: {os.path.basename(pdf_path)}")
             
-            # Extract text
-            ocr_text = self._extract_text_from_pdf(pdf_path)
+            # Extract text from file (PDF or image)
+            ocr_text = self._extract_text_from_file(pdf_path)
             
             if not ocr_text:
                 # Return sample data if OCR fails

@@ -197,11 +197,14 @@ async def root():
 
 @app.post("/api/upload-mnr", response_model=FormResponse)
 async def upload_mnr_pdf(file: UploadFile = File(...)):
-    """Upload an MNR PDF form for processing"""
+    """Upload an MNR file (PDF or image) for processing"""
     try:
-        # Validate file type
-        if not file.filename.endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+        # Validate file type - support PDF and common image formats
+        allowed_extensions = ['.pdf', '.jpeg', '.jpg', '.png', '.gif', '.bmp', '.tiff', '.webp']
+        file_ext = '.' + file.filename.split('.')[-1].lower() if '.' in file.filename else ''
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(status_code=400, detail="Only PDF files and images (JPEG, PNG, GIF, BMP, TIFF, WebP) are allowed")
         
         # Save uploaded file
         file_path = UPLOAD_DIR / file.filename
@@ -470,11 +473,16 @@ async def process_complete_pipeline(
     
     try:
         # Save uploaded file with original name for later reference
-        original_filename = file.filename or f"uploaded_{os.urandom(4).hex()}.pdf"
+        original_filename = file.filename or f"uploaded_{os.urandom(4).hex()}"
         original_path = UPLOAD_DIR / original_filename
         
-        # Save a temporary file for processing
-        temp_path = UPLOAD_DIR / f"temp_{os.urandom(4).hex()}.pdf"
+        # Save a temporary file for processing (preserve original extension)
+        if '.' in original_filename and len(original_filename.split('.')) > 1:
+            file_ext = '.' + original_filename.split('.')[-1].lower()
+        else:
+            # Default to .pdf if no extension detected
+            file_ext = '.pdf'
+        temp_path = UPLOAD_DIR / f"temp_{os.urandom(4).hex()}{file_ext}"
         
         with temp_path.open("wb") as buffer:
             content = file.file.read()
@@ -831,15 +839,32 @@ async def download_pdf(filename: str):
 
 @app.get("/api/uploads/{filename}")
 async def get_uploaded_file(filename: str):
-    """Serve uploaded PDF files"""
+    """Serve uploaded files (PDFs and images)"""
     file_path = UPLOAD_DIR / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Original file not found")
     
+    # Determine media type based on file extension
+    file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
+    
+    media_type_map = {
+        'pdf': 'application/pdf',
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'bmp': 'image/bmp',
+        'tiff': 'image/tiff',
+        'tif': 'image/tiff',
+        'webp': 'image/webp'
+    }
+    
+    media_type = media_type_map.get(file_ext, 'application/octet-stream')
+    
     return FileResponse(
         path=str(file_path),
         filename=filename,
-        media_type="application/pdf",
+        media_type=media_type,
         headers={
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Allow-Methods": "GET",
