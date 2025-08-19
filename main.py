@@ -119,6 +119,8 @@ async def startup_event():
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
 CORS_ORIGINS = [
     FRONTEND_URL,
+    "http://localhost",           # Docker frontend on port 80
+    "http://localhost:80",        # Docker frontend explicit port
     "http://localhost:3000",
     "http://localhost:5173",
     "http://localhost:8080",
@@ -1297,6 +1299,30 @@ async def update_pdf_with_corrections(
     except Exception as e:
         logger.error(f"❌ PDF update failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker containers"""
+    try:
+        # Check if pipeline is available
+        pipeline_status = "available" if PIPELINE_AVAILABLE else "unavailable"
+        
+        # Check directories exist
+        directories_ok = all([
+            UPLOAD_DIR.exists(),
+            OUTPUT_DIR.exists(),
+            TEMPLATE_DIR.exists()
+        ])
+        
+        return {
+            "status": "healthy",
+            "pipeline_available": PIPELINE_AVAILABLE,
+            "legacy_available": LEGACY_AVAILABLE,
+            "directories_ok": directories_ok,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Health check failed: {str(e)}")
 
 @app.delete("/api/cleanup")
 async def cleanup_files():
