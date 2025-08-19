@@ -16,8 +16,11 @@ import shutil
 import logging
 import asyncio
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from functools import lru_cache
+import hashlib
+import copy
 
 # Import progress tracking
 from progress_tracker import progress_tracker, ProgressCallback, ProgressStage
@@ -45,11 +48,72 @@ LEGACY_AVAILABLE = False
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ============= OPTIMIZATION: Template Pre-loading =============
+TEMPLATE_CACHE = {}
+EXTRACTION_CACHE = {}  # Cache extraction results
+CACHE_TTL = timedelta(hours=1)  # Cache time-to-live
+PDF_METHOD_CACHE = {}  # Cache which PDF method works for each template
+
+def preload_templates():
+    """Pre-load PDF templates into memory at startup"""
+    template_dir = Path(__file__).parent / "templates"
+    templates = {
+        "mnr": "mnr_form.pdf",
+        "ash": "ash_medical_form.pdf"
+    }
+    
+    for key, filename in templates.items():
+        template_path = template_dir / filename
+        if template_path.exists():
+            try:
+                with open(template_path, 'rb') as f:
+                    TEMPLATE_CACHE[key] = f.read()
+                    logger.info(f"✅ Pre-loaded template: {filename}")
+            except Exception as e:
+                logger.error(f"❌ Failed to pre-load template {filename}: {e}")
+    
+    return TEMPLATE_CACHE
+
+def get_file_hash(file_content: bytes) -> str:
+    """Generate hash of file content for caching"""
+    return hashlib.md5(file_content).hexdigest()
+
+@lru_cache(maxsize=10)
+def get_cached_extraction(file_hash: str, method: str):
+    """Get cached extraction result if available and not expired"""
+    cache_key = f"{file_hash}_{method}"
+    if cache_key in EXTRACTION_CACHE:
+        cached_data, timestamp = EXTRACTION_CACHE[cache_key]
+        if datetime.now() - timestamp < CACHE_TTL:
+            logger.info(f"✅ Using cached extraction for {cache_key[:8]}...")
+            return cached_data
+    return None
+
+def cache_extraction(file_hash: str, method: str, result: Any):
+    """Cache extraction result"""
+    cache_key = f"{file_hash}_{method}"
+    EXTRACTION_CACHE[cache_key] = (result, datetime.now())
+    logger.info(f"💾 Cached extraction for {cache_key[:8]}...")
+
 app = FastAPI(
     title="MNR Form API", 
     version="1.0.0",
     description="Medical Necessity Review Form Processing API"
 )
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize application resources on startup"""
+    logger.info("🚀 Starting MNR Form API...")
+    
+    # Pre-load templates
+    preload_templates()
+    
+    # Initialize PDF method cache
+    PDF_METHOD_CACHE["mnr"] = None  # Will be determined on first use
+    PDF_METHOD_CACHE["ash"] = None  # Will be determined on first use
+    
+    logger.info("✅ Application startup complete")
 
 # Environment-based CORS configuration
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
@@ -386,7 +450,8 @@ async def process_complete_pipeline(
     method: str = Query("openai", description="Processing method: 'openai', 'auto', or 'legacy'"),
     output_format: str = Query("both", description="Output format: 'mnr', 'ash', or 'both'"),
     enhanced: bool = Query(True, description="Use enhanced PDF filler"),
-    session_id: Optional[str] = Query(None, description="Progress tracking session ID")
+    session_id: Optional[str] = Query(None, description="Progress tracking session ID"),
+    use_optimized: bool = Query(True, description="Use optimized processing with caching")
 ):
     """Complete pipeline: Upload MNR -> Extract -> Generate Filled PDF using modular pipeline"""
     
@@ -438,50 +503,109 @@ async def process_complete_pipeline(
                 include_metadata=True
             )
             
-            # Start processing with progress tracking
-            if progress_callback:
-                progress_callback.on_extraction_start(method)
+            # Use optimized processor if enabled
+            if use_optimized:
+                try:
+                    from optimized_processor import process_optimized
+                    
+                    # Read file content from temp file
+                    with open(temp_path, 'rb') as f:
+                        file_content = f.read()
+                    
+                    # Process with optimization and custom progress tracking
+                    logger.info("⚡ Using optimized processor with caching and parallel processing")
+                    
+                    # Track extraction phase start
+                    if progress_callback:
+                        progress_callback.on_extraction_start(method)
+                    
+                    result = await process_optimized(
+                        file_content,
+                        method.lower(),
+                        output_format.lower(),
+                        config.to_dict(),
+                        progress_callback  # Pass progress callback to avoid duplicate updates
+                    )
+                    
+                    # Update progress for final stages only
+                    if progress_callback and result.success:
+                        # Mark PDF generation complete
+                        progress_callback.on_pdf_generation_complete(
+                            result.fields_filled or 0,
+                            result.output_pdf or ""
+                        )
+                        
+                        # Finalization
+                        progress_callback.on_finalization_start()
+                        
+                except Exception as e:
+                    logger.warning(f"⚠️ Optimized processing failed, falling back: {e}")
+                    use_optimized = False  # Fall back to standard processing
+            
+            # Standard processing (fallback or if not using optimized)
+            if not use_optimized:
+                # Start processing with progress tracking for standard path
+                if progress_callback:
+                    progress_callback.on_extraction_start(method)
                 
-            # Process with modular pipeline
-            if output_format.lower() == "both":
-                # Generate both MNR and ASH forms
-                logger.info("📄 Generating both MNR and ASH forms")
-                
-                # First generate MNR
-                config.output_format = "mnr"
-                mnr_result = process_medical_form(
-                    pdf_path=str(temp_path),
-                    output_format="mnr",
-                    extraction_method=method.lower(),
-                    config=config.to_dict()
-                )
-                
-                # Then generate ASH
-                config.output_format = "ash"
-                ash_result = process_medical_form(
-                    pdf_path=str(temp_path),
-                    output_format="ash",
-                    extraction_method=method.lower(),
-                    config=config.to_dict()
-                )
-                
-                # Combine results
-                result = mnr_result  # Use MNR as primary result
-                if mnr_result.success and ash_result.success:
-                    # Add ASH PDF URL to result
-                    ash_filename = os.path.basename(ash_result.output_pdf) if ash_result.output_pdf else None
-                    mnr_filename = os.path.basename(mnr_result.output_pdf) if mnr_result.output_pdf else None
-                    result.ash_pdf = ash_result.output_pdf
-                    result.ash_filename = ash_filename
-                    result.mnr_filename = mnr_filename
-            else:
-                # Single format generation
-                result = process_medical_form(
-                    pdf_path=str(temp_path),
-                    output_format=output_format.lower(),
-                    extraction_method=method.lower(),
-                    config=config.to_dict()
-                )
+                # Process with modular pipeline
+                if output_format.lower() == "both":
+                    # Generate both MNR and ASH forms with SHARED extraction
+                    logger.info("📄 Extracting once, then generating both MNR and ASH forms")
+                    
+                    # Step 1: Extract data ONCE
+                    config_extract = copy.deepcopy(config)
+                    config_extract.output_format = "mnr"  # Use MNR for extraction
+                    
+                    result = process_medical_form(
+                        pdf_path=str(temp_path),
+                        output_format="mnr",
+                        extraction_method=method.lower(),
+                        config=config_extract.to_dict()
+                    )
+                    
+                    # Step 2: If extraction successful, generate ASH form using same data
+                    if result.success and result.extraction_result:
+                        logger.info("📄 Using extracted data to generate ASH form")
+                        
+                        # Generate ASH PDF using the already extracted data
+                        from pipeline.json_processor import JSONProcessorOrchestrator
+                        from pipeline.ash_pdf_filler import ASHPDFFiller
+                        import copy as copy_module
+                        
+                        try:
+                            # Process data for ASH format
+                            json_processor = JSONProcessorOrchestrator()
+                            ash_processing = json_processor.full_pipeline(
+                                raw_data=result.extraction_result.data,
+                                output_format="ash"
+                            )
+                            
+                            if ash_processing.success:
+                                # Generate ASH PDF
+                                ash_filler = ASHPDFFiller()
+                                ash_template = os.path.join(os.path.dirname(__file__), "templates", "ash_medical_form.pdf")
+                                ash_output = os.path.join(config.output_directory, f"ash_form_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf")
+                                
+                                ash_result = ash_filler.fill_pdf(ash_processing.data, ash_template, ash_output)
+                                
+                                if ash_result.success:
+                                    # Add ASH info to result
+                                    result.ash_pdf = ash_output
+                                    result.ash_filename = os.path.basename(ash_output)
+                                    result.mnr_filename = os.path.basename(result.output_pdf) if result.output_pdf else None
+                                    logger.info(f"✅ Both forms generated successfully")
+                        except Exception as e:
+                            logger.warning(f"⚠️ ASH generation failed: {e}")
+                            # Continue with just MNR form
+                else:
+                    # Single format generation
+                    result = process_medical_form(
+                        pdf_path=str(temp_path),
+                        output_format=output_format.lower(),
+                        extraction_method=method.lower(),
+                        config=config.to_dict()
+                    )
             
             # Update progress based on result
             if progress_callback:
