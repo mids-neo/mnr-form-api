@@ -115,27 +115,36 @@ async def startup_event():
     
     logger.info("✅ Application startup complete")
 
-# Environment-based CORS configuration
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
-CORS_ORIGINS = [
-    FRONTEND_URL,
-    "http://localhost",           # Docker frontend on port 80
-    "http://localhost:80",        # Docker frontend explicit port
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:8080",
-    "https://mnr-form-ai.netlify.app",  # Add your frontend domain
-    "https://mnr-form-ai.vercel.app",   # Add your frontend domain
-]
+# Import configuration
+from config import get_cors_origins, IS_PRODUCTION, API_HOST, API_PORT
 
-# Configure CORS
+# Environment-based CORS configuration
+CORS_ORIGINS = get_cors_origins()
+
+# Configure CORS with explicit settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+# Add explicit OPTIONS handler for all routes
+@app.options("/{path:path}")
+async def options_handler(path: str):
+    """Handle preflight OPTIONS requests"""
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, HEAD, PATCH",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Max-Age": "3600",
+            "Access-Control-Allow-Credentials": "true"
+        }
+    )
 
 # Base paths for static files
 BASE_DIR = Path(__file__).parent
