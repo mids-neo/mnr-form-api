@@ -286,7 +286,13 @@ Extract comprehensively and accurately from the ACTUAL FORM IMAGE.
             )
             
             # Parse response
-            extracted_data = json.loads(response.choices[0].message.content)
+            response_content = response.choices[0].message.content
+            logger.debug(f"OpenAI response content: {response_content}")
+            
+            if not response_content:
+                raise ValueError("OpenAI returned empty response content")
+            
+            extracted_data = json.loads(response_content)
             
             # Calculate metrics
             tokens = response.usage.total_tokens

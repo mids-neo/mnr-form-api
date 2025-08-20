@@ -106,6 +106,14 @@ async def startup_event():
     """Initialize application resources on startup"""
     logger.info("🚀 Starting MNR Form API...")
     
+    # Initialize database
+    try:
+        from database import create_tables
+        create_tables()
+        logger.info("✅ Database tables created/verified")
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+    
     # Pre-load templates
     preload_templates()
     
@@ -158,6 +166,14 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 TEMPLATE_DIR.mkdir(exist_ok=True)
 CONFIG_DIR.mkdir(exist_ok=True)
+
+# Include authentication routes
+from auth_routes import router as auth_router
+app.include_router(auth_router)
+
+# Include secure medical form processing routes
+from secure_medical_routes import router as secure_router
+app.include_router(secure_router)
 
 class ProcessFormRequest(BaseModel):
     mnr_pdf_name: str

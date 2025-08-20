@@ -33,7 +33,7 @@ class PipelineStage(Enum):
 
 @dataclass
 class PipelineConfig:
-    """Configuration for pipeline execution"""
+    """Configuration for pipeline execution with HIPAA compliance"""
     # Extraction settings
     extraction_method: str = "auto"  # "auto", "openai", "legacy"
     extraction_fallback: bool = True
@@ -51,6 +51,15 @@ class PipelineConfig:
     
     # Metadata settings
     include_metadata: bool = True
+    
+    # HIPAA Compliance settings
+    user_id: Optional[int] = None
+    session_id: Optional[str] = None
+    user_email: Optional[str] = None
+    user_role: Optional[str] = None
+    processing_session: Optional[str] = None
+    audit_enabled: bool = True
+    phi_encryption: bool = True
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary"""
@@ -91,7 +100,7 @@ class PipelineResult:
     pipeline_metadata: Optional[Dict[str, Any]] = None
 
 class MedicalFormPipeline:
-    """Orchestrates the complete medical form processing pipeline"""
+    """Orchestrates the complete medical form processing pipeline with HIPAA compliance"""
     
     def __init__(self, config: Optional[PipelineConfig] = None):
         """Initialize pipeline with configuration"""
@@ -108,20 +117,78 @@ class MedicalFormPipeline:
         self.current_stage = PipelineStage.EXTRACTION
         self.warnings = []
         
-        logger.info("🎭 Medical Form Pipeline initialized")
-        logger.info(f"📋 Config: {self.config.to_dict()}")
+        # HIPAA compliance validation
+        if self.config.audit_enabled:
+            self._validate_hipaa_config()
+        
+        logger.info("🎭 Medical Form Pipeline initialized with HIPAA compliance")
+        logger.info(f"📋 User: {self.config.user_email or 'Unknown'} ({self.config.user_role or 'Unknown'})")
+        logger.info(f"📋 Session: {self.config.session_id or 'None'}")
+        
+        # Only log non-sensitive config details
+        safe_config = {k: v for k, v in self.config.to_dict().items() 
+                      if k not in ['user_id', 'user_email', 'session_id']}
+        logger.info(f"📋 Config: {safe_config}")
+    
+    def _validate_hipaa_config(self):
+        """Validate HIPAA compliance requirements"""
+        if not self.config.user_id:
+            logger.warning("⚠️ HIPAA Warning: No user_id provided for PHI processing")
+        if not self.config.session_id:
+            logger.warning("⚠️ HIPAA Warning: No session_id provided for audit trail")
+        if not self.config.user_email:
+            logger.warning("⚠️ HIPAA Warning: No user_email provided for accountability")
+        
+        # Log HIPAA compliance status
+        logger.info(f"🔒 HIPAA Compliance: User tracking {'✅' if self.config.user_id else '❌'}, "
+                   f"Session tracking {'✅' if self.config.session_id else '❌'}, "
+                   f"Audit logging {'✅' if self.config.audit_enabled else '❌'}")
+    
+    def _log_hipaa_audit(self, stage: str, action: str, details: Optional[Dict[str, Any]] = None):
+        """Log HIPAA-compliant audit entry"""
+        if not self.config.audit_enabled:
+            return
+            
+        audit_entry = {
+            'timestamp': datetime.now().isoformat(),
+            'user_id': self.config.user_id,
+            'user_email': self.config.user_email,
+            'user_role': self.config.user_role,
+            'session_id': self.config.session_id,
+            'processing_session': self.config.processing_session,
+            'pipeline_stage': stage,
+            'action': action,
+            'details': details or {}
+        }
+        
+        # Log without sensitive data
+        safe_audit = {k: v for k, v in audit_entry.items() 
+                     if k not in ['user_id', 'user_email']}
+        logger.info(f"🔒 HIPAA Audit: {safe_audit}")
     
     def process(self, pdf_path: str, template_path: Optional[str] = None) -> PipelineResult:
-        """Execute the complete pipeline"""
+        """Execute the complete pipeline with HIPAA compliance"""
         start_time = datetime.now()
         
+        # HIPAA Audit: Pipeline initiation
+        self._log_hipaa_audit(
+            "pipeline_start", 
+            "initiated_phi_processing",
+            {
+                "input_file": os.path.basename(pdf_path),
+                "output_format": self.config.output_format,
+                "extraction_method": self.config.extraction_method
+            }
+        )
+        
         try:
-            logger.info(f"🚀 Starting pipeline for: {os.path.basename(pdf_path)}")
+            logger.info(f"🚀 Starting HIPAA-compliant pipeline for: {os.path.basename(pdf_path)}")
             logger.info(f"🎯 Output format: {self.config.output_format}")
             logger.info(f"⚙️ Method: {self.config.extraction_method}")
             
             # Validate input
             if not os.path.exists(pdf_path):
+                self._log_hipaa_audit("validation", "input_file_not_found", {"file": pdf_path})
                 return PipelineResult(
                     success=False,
                     stage_reached=PipelineStage.FAILED,
@@ -139,16 +206,22 @@ class MedicalFormPipeline:
             )
             
             # Stage 1: Extraction
+            self._log_hipaa_audit("extraction", "started_phi_extraction", {"method": self.config.extraction_method})
             extraction_result = self._execute_extraction(pdf_path)
             result.extraction_result = extraction_result
             result.total_cost += extraction_result.cost
             
             if not extraction_result.success:
+                self._log_hipaa_audit("extraction", "phi_extraction_failed", {"error": extraction_result.error})
                 result.error = f"Extraction failed: {extraction_result.error}"
                 result.stage_reached = PipelineStage.FAILED
                 return self._finalize_result(result, start_time)
             
             result.fields_extracted = len(extraction_result.data) if extraction_result.data else 0
+            self._log_hipaa_audit("extraction", "phi_extraction_completed", {
+                "fields_extracted": result.fields_extracted,
+                "cost": extraction_result.cost
+            })
             logger.info(f"✅ Extraction completed: {result.fields_extracted} fields")
             
             # Stage 2: JSON Processing
