@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better layer caching
-COPY requirements-minimal.txt .
+COPY deployment/requirements-minimal.txt .
 
 # Install core Python dependencies first
 RUN pip install --upgrade pip setuptools wheel
